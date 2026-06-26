@@ -1,5 +1,5 @@
 """
-할 일 관리 앱 (Streamlit 버전)
+할 일 관리 앱 (Streamlit 버전) - 키워드 기반 자동 카테고리 분류 지원
 
 실행 방법:
     pip install -r requirements.txt
@@ -26,6 +26,49 @@ CATEGORIES = {
     "personal": ("개인", "#f59e4f"),
     "study": ("공부", "#2bb673"),
 }
+
+# 자동 분류용 카테고리별 키워드 사전
+CATEGORY_KEYWORDS = {
+    "work": [
+        "회의", "미팅", "보고서", "보고", "메일", "이메일", "업무", "프로젝트",
+        "발표", "고객", "클라이언트", "결재", "출장", "거래처", "계약", "마감",
+        "기획", "회사", "팀", "납품", "견적", "리뷰", "배포", "이슈",
+    ],
+    "study": [
+        "공부", "시험", "강의", "인강", "숙제", "과제", "학습", "복습", "예습",
+        "독서", "책", "알고리즘", "코딩", "영어", "단어", "자격증", "문제",
+        "수업", "논문", "정리노트", "토익", "수학", "리서치", "스터디",
+    ],
+    "personal": [
+        "운동", "헬스", "약속", "쇼핑", "장보기", "병원", "청소", "빨래", "요리",
+        "가족", "친구", "여행", "취미", "은행", "약", "미용실", "산책", "식사",
+        "영화", "휴식", "생일", "선물", "예약",
+    ],
+}
+
+DEFAULT_CATEGORY = "personal"  # 키워드가 안 맞을 때 기본값
+
+
+# =========================================================
+# 자동 분류
+# =========================================================
+def classify_category(text):
+    """할 일 텍스트의 키워드를 분석해 카테고리를 추정한다.
+
+    각 카테고리별로 텍스트에 포함된 키워드 개수를 세어 가장 많은 쪽을 고른다.
+    매칭이 없으면 기본 카테고리(개인)를 반환한다.
+    """
+    text = text.lower()
+    scores = {cat: 0 for cat in CATEGORY_KEYWORDS}
+    for cat, keywords in CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw.lower() in text:
+                scores[cat] += 1
+
+    best_cat = max(scores, key=scores.get)
+    if scores[best_cat] == 0:
+        return DEFAULT_CATEGORY
+    return best_cat
 
 
 # =========================================================
@@ -68,11 +111,15 @@ def init_state():
 # 기능 함수 (CRUD)
 # =========================================================
 def add_todo(text, category):
+    """category가 'auto'이면 키워드 기반으로 자동 분류한다."""
     text = text.strip()
     if text == "":
         return  # 빈 내용은 추가하지 않음
-    if category not in CATEGORIES:
-        category = "personal"
+
+    if category == "auto":
+        category = classify_category(text)
+    elif category not in CATEGORIES:
+        category = DEFAULT_CATEGORY
 
     st.session_state.todos.append(
         {
@@ -95,6 +142,11 @@ def edit_todo(todo_id, new_text, new_category):
     new_text = new_text.strip()
     if new_text == "":
         return
+
+    # 수정 시에도 자동 분류 지원
+    if new_category == "auto":
+        new_category = classify_category(new_text)
+
     for todo in st.session_state.todos:
         if todo["id"] == todo_id:
             todo["text"] = new_text
@@ -152,8 +204,12 @@ def main():
     st.divider()
 
     # ---------- 입력 영역 ----------
+    # 카테고리 선택지: 자동 + 수동 3종
+    add_options = ["auto"] + list(CATEGORIES.keys())
+    add_labels = {"auto": "🤖 자동", **{k: v[0] for k, v in CATEGORIES.items()}}
+
     with st.form("add_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns([3, 1.2, 1])
+        col1, col2, col3 = st.columns([3, 1.3, 1])
         with col1:
             new_text = st.text_input(
                 "할 일", placeholder="할 일을 입력하세요", label_visibility="collapsed"
@@ -161,8 +217,8 @@ def main():
         with col2:
             new_cat = st.selectbox(
                 "카테고리",
-                options=list(CATEGORIES.keys()),
-                format_func=lambda c: CATEGORIES[c][0],
+                options=add_options,
+                format_func=lambda c: add_labels[c],
                 label_visibility="collapsed",
             )
         with col3:
@@ -170,6 +226,8 @@ def main():
         if submitted:
             add_todo(new_text, new_cat)
             st.rerun()
+
+    st.caption("💡 카테고리를 '🤖 자동'으로 두면 입력한 내용의 키워드로 자동 분류돼요.")
 
     # ---------- 카테고리 필터 ----------
     filter_options = ["all"] + list(CATEGORIES.keys())
@@ -201,10 +259,13 @@ def main():
         st.info(msg)
         return
 
+    # 수정 모드 카테고리 선택지: 자동 + 수동 3종
+    edit_options = ["auto"] + list(CATEGORIES.keys())
+
     for todo in visible:
         # --- 수정 모드 ---
         if st.session_state.editing_id == todo["id"]:
-            ec1, ec2, ec3, ec4 = st.columns([3, 1.2, 0.8, 0.8])
+            ec1, ec2, ec3, ec4 = st.columns([3, 1.3, 0.8, 0.8])
             with ec1:
                 edit_text = st.text_input(
                     "수정", value=todo["text"],
@@ -212,11 +273,10 @@ def main():
                     label_visibility="collapsed",
                 )
             with ec2:
-                cat_keys = list(CATEGORIES.keys())
                 edit_cat = st.selectbox(
-                    "카테고리", options=cat_keys,
-                    index=cat_keys.index(todo["category"]),
-                    format_func=lambda c: CATEGORIES[c][0],
+                    "카테고리", options=edit_options,
+                    index=edit_options.index(todo["category"]),
+                    format_func=lambda c: add_labels[c],
                     key=f"edit_cat_{todo['id']}",
                     label_visibility="collapsed",
                 )
